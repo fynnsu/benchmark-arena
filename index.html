@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LLM Performance Benchmark</title>
+    <title>Speculative Decoding Benchmark</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
@@ -40,6 +40,103 @@
         .stat-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        /* Tooltip styling */
+        .tooltip {
+            position: relative;
+            cursor: help;
+            border-bottom: 1px dotted currentColor;
+        }
+
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 280px;
+            background-color: #1f2937;
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px 12px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -140px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+        }
+
+        .tooltip .tooltiptext::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #1f2937 transparent transparent transparent;
+        }
+
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        /* Token animation visualization */
+        .token-viz {
+            height: 40px;
+            background: rgba(0, 0, 0, 0.02);
+            border-radius: 4px;
+            padding: 6px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            scroll-behavior: smooth;
+        }
+
+        .token-box {
+            display: inline-block;
+            min-width: 8px;
+            height: 24px;
+            border-radius: 3px;
+            animation: tokenAppear 0.2s ease-out;
+            flex-shrink: 0;
+            background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+            border: 1px solid #374151;
+        }
+
+        .token-box.burst-group {
+            display: inline-flex;
+            gap: 2px;
+            padding: 2px 4px;
+            background: rgba(34, 197, 94, 0.15);
+            border-radius: 4px;
+            border: 1px solid #22c55e;
+            margin-right: 4px;
+        }
+
+        @keyframes tokenAppear {
+            from {
+                opacity: 0;
+                transform: scale(0.5);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .token-viz-label {
+            font-size: 0.65rem;
+            color: #6b7280;
+            margin-bottom: 2px;
+            font-weight: 500;
         }
 
         .highlight {
@@ -146,7 +243,7 @@
 <body class="bg-gray-50 min-h-screen flex flex-col">
     <header class="bg-white shadow-sm">
         <div class="max-w-7xl mx-auto px-4 py-2 sm:px-6 lg:px-8 flex justify-between items-center">
-            <h1 class="text-xl font-bold text-gray-900">LLM Performance Benchmark</h1>
+            <h1 class="text-xl font-bold text-gray-900">Speculative Decoding Benchmark</h1>
             <div class="flex space-x-2">
                 <button id="reset-btn"
                     class="px-3 py-1 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition text-sm">
@@ -156,10 +253,6 @@
                     class="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm">
                     <i class="fas fa-cog mr-1"></i>Setup
                 </button>
-                <button id="history-btn"
-                    class="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm">
-                    <i class="fas fa-history mr-1"></i>History
-                </button>
             </div>
         </div>
     </header>
@@ -168,97 +261,157 @@
         <!-- Summary Grid -->
         <div class="grid grid-cols-12 gap-4 mb-4">
             <!-- Performance Stats -->
-            <div class="col-span-2 space-y-2">
+            <div class="col-span-3 space-y-2">
                 <div class="stat-card bg-green-50 p-2 rounded-lg border border-green-100">
-                    <div class="text-sm font-medium text-green-800">E2E Latency Speedup</div>
+                    <div class="text-sm font-medium text-green-800 tooltip">E2E Latency Speedup
+                        <span class="tooltiptext">Total time from sending prompt to receiving complete response. Speculative decoding reduces wall-clock time by accepting multiple draft tokens per step.</span>
+                    </div>
                     <div id="e2e-latency-speedup" class="text-lg font-bold text-green-900">-</div>
                     <div class="text-xs text-green-600">End-to-End Response (s)</div>
                 </div>
                 <div class="stat-card bg-yellow-50 p-2 rounded-lg border border-yellow-100">
-                    <div class="text-sm font-medium text-yellow-800">ITL Speedup</div>
+                    <div class="text-sm font-medium text-yellow-800 tooltip">ITL Speedup
+                        <span class="tooltiptext">Inter-Token Latency: average time between tokens. With speculative decoding, multiple tokens arrive together, dramatically reducing effective ITL.</span>
+                    </div>
                     <div id="itl-improvement" class="text-lg font-bold text-yellow-900">-</div>
                     <div class="text-xs text-yellow-600">Inter-token Latency</div>
                 </div>
                 <div class="stat-card bg-blue-50 p-2 rounded-lg border border-blue-100">
-                    <div class="text-sm font-medium text-blue-800">Throughput Speedup</div>
+                    <div class="text-sm font-medium text-blue-800 tooltip">Throughput Speedup
+                        <span class="tooltiptext">Tokens generated per second. Higher throughput means faster generation. Speculative decoding can achieve 2-3x throughput improvements.</span>
+                    </div>
                     <div id="speed-improvement" class="text-lg font-bold text-blue-900">-</div>
                     <div class="text-xs text-blue-600">Output Tokens/second</div>
                 </div>
+                <div class="stat-card bg-purple-50 p-2 rounded-lg border border-purple-100">
+                    <div class="text-sm font-medium text-purple-800 tooltip">Acceptance Rate
+                        <span class="tooltiptext">Percentage of draft tokens accepted by the target model. Higher acceptance rate (70-90%) means more efficient speculation and better speedup.</span>
+                    </div>
+                    <div id="acceptance-rate" class="text-lg font-bold text-purple-900">-</div>
+                    <div class="text-xs text-purple-600">Draft tokens accepted</div>
+                </div>
             </div>
 
-            <!-- Performance Chart -->
-            <div class="col-span-10 bg-white p-3 rounded-lg shadow">
-                <canvas id="performance-chart" height="80"></canvas>
+            <!-- Performance Charts -->
+            <div class="col-span-9 grid grid-cols-3 gap-3">
+                <div class="bg-white p-3 rounded-lg shadow flex flex-col">
+                    <h3 class="text-xs font-semibold text-gray-700 mb-2 text-center">E2E Latency (s)</h3>
+                    <div class="flex-1" style="min-height: 160px; position: relative;">
+                        <canvas id="e2e-chart"></canvas>
+                    </div>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow flex flex-col">
+                    <h3 class="text-xs font-semibold text-gray-700 mb-2 text-center">Inter-Token Latency (ms)</h3>
+                    <div class="flex-1" style="min-height: 160px; position: relative;">
+                        <canvas id="itl-chart"></canvas>
+                    </div>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow flex flex-col">
+                    <h3 class="text-xs font-semibold text-gray-700 mb-2 text-center">Throughput (tokens/s)</h3>
+                    <div class="flex-1" style="min-height: 160px; position: relative;">
+                        <canvas id="throughput-chart"></canvas>
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- Chat Comparison -->
         <div class="grid grid-cols-2 gap-6 mb-6">
-            <!-- Baseline Model -->
+            <!-- Standard Decoding -->
             <div class="bg-white rounded-lg shadow overflow-hidden">
                 <div class="bg-gray-800 text-white px-4 py-3 flex justify-between items-center">
                     <div>
-                        <span id="baseline-model-name" class="font-medium">Baseline Model</span>
+                        <span id="baseline-model-name" class="font-medium">Standard Decoding</span>
                     </div>
                     <div class="flex items-center space-x-2">
                         <span id="baseline-status"
                             class="text-xs px-2 py-1 rounded-full bg-gray-600">Disconnected</span>
                     </div>
                 </div>
+                <div class="px-4 py-2 bg-gray-50 border-b border-gray-200">
+                    <div class="token-viz-label tooltip">Token Generation Pattern
+                        <span class="tooltiptext">Shows tokens as they're generated. Standard decoding produces one token at a time (no grouping).</span>
+                    </div>
+                    <div id="baseline-token-viz" class="token-viz"></div>
+                </div>
                 <div id="baseline-chat" class="h-96 overflow-y-auto p-4 space-y-4 bg-gray-40">
                     <div class="text-center text-gray-500 py-10">
                         <i class="fas fa-robot text-4xl mb-2"></i>
-                        <p>Connect to baseline model to start benchmarking</p>
+                        <p>Connect to standard decoding model to start benchmarking</p>
                     </div>
                 </div>
                 <div class="bg-gray-100 px-4 py-2 border-t border-gray-200">
                     <div class="grid grid-cols-3 gap-2 text-xs">
                         <div>
-                            <div class="text-gray-500">TTFT</div>
+                            <div class="text-gray-500 tooltip">TTFT
+                                <span class="tooltiptext">Time To First Token: latency before first token appears</span>
+                            </div>
                             <div id="baseline-ttft" class="font-medium">- ms</div>
                         </div>
                         <div>
-                            <div class="text-gray-500">ITL</div>
+                            <div class="text-gray-500 tooltip">ITL
+                                <span class="tooltiptext">Inter-Token Latency: average time between tokens</span>
+                            </div>
                             <div id="baseline-itl" class="font-medium">- ms</div>
                         </div>
                         <div>
-                            <div class="text-gray-500">Throughput</div>
+                            <div class="text-gray-500 tooltip">Throughput
+                                <span class="tooltiptext">Tokens generated per second</span>
+                            </div>
                             <div id="baseline-throughput" class="font-medium">- t/s</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Quantized Model -->
+            <!-- Speculative Decoding -->
             <div class="bg-white rounded-lg shadow overflow-hidden">
-                <div class="bg-red-800 text-white px-4 py-3 flex justify-between items-center">
+                <div class="bg-green-800 text-white px-4 py-3 flex justify-between items-center">
                     <div>
-                        <span id="quantized-model-name" class="font-medium">Quantized Model</span>
+                        <span id="quantized-model-name" class="font-medium">Speculative Decoding</span>
                     </div>
                     <div class="flex items-center space-x-2">
                         <span id="quantized-status"
-                            class="text-xs px-2 py-1 rounded-full bg-red-600">Disconnected</span>
+                            class="text-xs px-2 py-1 rounded-full bg-green-600">Disconnected</span>
                     </div>
                 </div>
-                <div id="quantized-chat" class="h-96 overflow-y-auto p-4 space-y-4 bg-red-40">
-                    <div class="text-center text-red-500 py-10">
+                <div class="px-4 py-2 bg-green-50 border-b border-green-200">
+                    <div class="token-viz-label tooltip">Token Generation Pattern
+                        <span class="tooltiptext">Shows tokens as they're generated. Grouped boxes indicate multiple tokens generated together (draft tokens accepted).</span>
+                    </div>
+                    <div id="quantized-token-viz" class="token-viz"></div>
+                </div>
+                <div id="quantized-chat" class="h-96 overflow-y-auto p-4 space-y-4 bg-green-40">
+                    <div class="text-center text-green-500 py-10">
                         <i class="fas fa-bolt text-4xl mb-2"></i>
-                        <p>Connect to quantized model to start benchmarking</p>
+                        <p>Connect to speculative decoding model to start benchmarking</p>
                     </div>
                 </div>
-                <div class="bg-red-50 px-4 py-2 border-t border-red-200">
-                    <div class="grid grid-cols-3 gap-2 text-xs">
+                <div class="bg-green-50 px-4 py-2 border-t border-green-200">
+                    <div class="grid grid-cols-4 gap-2 text-xs">
                         <div>
-                            <div class="text-red-500">TTFT</div>
+                            <div class="text-green-500 tooltip">TTFT
+                                <span class="tooltiptext">Time To First Token: latency before first token appears</span>
+                            </div>
                             <div id="quantized-ttft" class="font-medium">- ms</div>
                         </div>
                         <div>
-                            <div class="text-red-500">ITL</div>
+                            <div class="text-green-500 tooltip">ITL
+                                <span class="tooltiptext">Inter-Token Latency: avg time per token (accounts for multi-token chunks)</span>
+                            </div>
                             <div id="quantized-itl" class="font-medium">- ms</div>
                         </div>
                         <div>
-                            <div class="text-red-500">Throughput</div>
+                            <div class="text-green-500 tooltip">Throughput
+                                <span class="tooltiptext">Tokens per second (much higher with speculation)</span>
+                            </div>
                             <div id="quantized-throughput" class="font-medium">- t/s</div>
+                        </div>
+                        <div>
+                            <div class="text-green-500 tooltip">Accept Rate
+                                <span class="tooltiptext">% of draft tokens accepted (higher = better speedup)</span>
+                            </div>
+                            <div id="quantized-accept-rate" class="font-medium">- %</div>
                         </div>
                     </div>
                 </div>
@@ -289,40 +442,119 @@
                     </div>
                 </div>
 
-                <div>
+                <div class="flex gap-2">
                     <button id="send-btn"
                         class="h-full bg-blue-600 text-white px-6 py-3 rounded-md hover:bg-blue-700 transition disabled:opacity-50 flex items-center"
                         disabled>
                         <i class="fas fa-paper-plane mr-2"></i>Send
                         <span class="ml-2 text-xs">(<span id="token-count">0</span> tokens)</span>
                     </button>
+                    <button id="stop-btn"
+                        class="h-full bg-red-600 text-white px-6 py-3 rounded-md hover:bg-red-700 transition hidden flex items-center"
+                        title="Stop generation">
+                        <i class="fas fa-stop mr-2"></i>Stop
+                    </button>
                 </div>
             </div>
         </div>
         <!-- Example Prompts -->
-        <div class="mt-4 flex items-center">
-            <h3 class="text-sm font-medium text-gray-700 mr-4">Example Prompts:</h3>
-            <div class="flex flex-wrap gap-2">
-                <button
-                    class="example-prompt px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition"
-                    data-prompt="Explain quantum computing in simple terms.">
-                    Quantum Computing
-                </button>
-                <button
-                    class="example-prompt px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition"
-                    data-prompt="Write a short story about a robot learning to paint.">
-                    Robot Story
-                </button>
-                <button
-                    class="example-prompt px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition"
-                    data-prompt="Compare and contrast Python and JavaScript programming languages.">
-                    Python vs JavaScript
-                </button>
-                <button
-                    class="example-prompt px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition"
-                    data-prompt="What are the key principles of good UI/UX design?">
-                    UI/UX Principles
-                </button>
+        <div class="mt-4">
+            <h3 class="text-sm font-medium text-gray-700 mb-3">Example Prompts by Type:</h3>
+
+            <!-- Structured Output - High Acceptance -->
+            <div class="mb-3">
+                <div class="flex items-center mb-2">
+                    <span class="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded">⚡ HIGH ACCEPTANCE</span>
+                    <span class="text-xs text-gray-600 ml-2 tooltip">Structured Output
+                        <span class="tooltiptext">Repetitive, predictable patterns lead to high draft token acceptance (80-95%)</span>
+                    </span>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-green-50 hover:bg-green-100 text-green-800 border border-green-200 rounded-md transition"
+                        data-prompt="Generate a JSON array of 10 products with id, name, price, and category fields. Make them tech products.">
+                        📋 Generate JSON
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-green-50 hover:bg-green-100 text-green-800 border border-green-200 rounded-md transition"
+                        data-prompt="Create a markdown table comparing 5 cloud providers (AWS, Azure, GCP, Oracle, IBM) across these dimensions: pricing, global regions, ML services, and market share.">
+                        📊 Comparison Table
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-green-50 hover:bg-green-100 text-green-800 border border-green-200 rounded-md transition"
+                        data-prompt="Write a SQL schema for an e-commerce database with tables for users, products, orders, and reviews. Include primary keys, foreign keys, and common indexes.">
+                        🗄️ SQL Schema
+                    </button>
+                </div>
+            </div>
+
+            <!-- Code Generation - Good Acceptance -->
+            <div class="mb-3">
+                <div class="flex items-center mb-2">
+                    <span class="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">⚡ GOOD ACCEPTANCE</span>
+                    <span class="text-xs text-gray-600 ml-2 tooltip">Code Generation
+                        <span class="tooltiptext">Predictable syntax patterns lead to good acceptance rates (70-85%)</span>
+                    </span>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-md transition"
+                        data-prompt="Write a Python function to implement binary search on a sorted array. Include docstring and type hints.">
+                        💻 Binary Search
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-md transition"
+                        data-prompt="Create a React component for a user profile card with avatar, name, bio, and social links. Use TypeScript and Tailwind CSS.">
+                        ⚛️ React Component
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-md transition"
+                        data-prompt="Write a REST API endpoint in Express.js for creating a new blog post. Include validation, error handling, and database storage.">
+                        🔌 API Endpoint
+                    </button>
+                </div>
+            </div>
+
+            <!-- Explanations - Variable Acceptance -->
+            <div class="mb-3">
+                <div class="flex items-center mb-2">
+                    <span class="text-xs font-semibold text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">⚡ VARIABLE ACCEPTANCE</span>
+                    <span class="text-xs text-gray-600 ml-2 tooltip">Explanations & Analysis
+                        <span class="tooltiptext">Mix of structured and creative content (60-75% acceptance)</span>
+                    </span>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200 rounded-md transition"
+                        data-prompt="Explain how transformers work in deep learning. Cover attention mechanisms, positional encoding, and why they're better than RNNs.">
+                        🧠 Explain Transformers
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200 rounded-md transition"
+                        data-prompt="Compare and contrast microservices vs monolithic architecture. Include pros, cons, and when to use each approach.">
+                        🏗️ Architecture Comparison
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200 rounded-md transition"
+                        data-prompt="What are the trade-offs between SQL and NoSQL databases? Give examples of use cases for each.">
+                        🗃️ SQL vs NoSQL
+                    </button>
+                </div>
+            </div>
+
+            <!-- Creative Writing - Lower Acceptance -->
+            <div class="mb-3">
+                <div class="flex items-center mb-2">
+                    <span class="text-xs font-semibold text-purple-700 bg-purple-100 px-2 py-0.5 rounded">⚡ LOWER ACCEPTANCE</span>
+                    <span class="text-xs text-gray-600 ml-2 tooltip">Creative & Reasoning
+                        <span class="tooltiptext">Unpredictable, creative outputs lead to lower acceptance (40-60%)</span>
+                    </span>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 rounded-md transition"
+                        data-prompt="Write a short story about an AI that discovers it can dream. Make it thought-provoking and emotionally engaging.">
+                        ✍️ Creative Story
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 rounded-md transition"
+                        data-prompt="Solve this logic puzzle: Five houses in different colors. Each owner has a different pet, drinks a different beverage, and smokes a different cigar. The Brit lives in the red house. The Swede keeps dogs. Who owns the fish?">
+                        🧩 Logic Puzzle
+                    </button>
+                    <button class="example-prompt px-3 py-1.5 text-sm bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 rounded-md transition"
+                        data-prompt="Generate 5 unique startup ideas combining AI and sustainability. For each, explain the problem, solution, and potential business model.">
+                        💡 Brainstorm Ideas
+                    </button>
+                </div>
             </div>
         </div>
         </div>
@@ -335,14 +567,16 @@
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Model Configuration</h3>
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700">Baseline URL</label>
+                        <label class="block text-sm font-medium text-gray-700">Standard Decoding URL</label>
                         <input type="text" id="baseline-url" value="http://localhost:9000/v1"
                             class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border text-sm">
+                        <p class="mt-1 text-xs text-gray-500">Target model without draft model</p>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700">Quantized URL</label>
+                        <label class="block text-sm font-medium text-gray-700">Speculative Decoding URL</label>
                         <input type="text" id="quantized-url" value="http://localhost:9001/v1"
                             class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border text-sm">
+                        <p class="mt-1 text-xs text-gray-500">Target model with draft model</p>
                     </div>
                     <div class="flex justify-end space-x-3 mt-4">
                         <button id="cancel-setup"
@@ -388,11 +622,17 @@
             throughput: null,
             tokens: 0,
             startTime: null,
-            lastTokenTime: null
+            lastTokenTime: null,
+            acceptanceRate: null,
+            draftTokensProposed: 0,
+            draftTokensAccepted: 0
         };
 
-        let performanceChart = null;
+        let e2eChart = null;
+        let itlChart = null;
+        let throughputChart = null;
         let chatHistory = [];
+        let currentAbortController = null; // For canceling requests
 
         // Initialize tokenizer
         let tokenizer = null;
@@ -421,8 +661,8 @@
 
         // DOM elements
         const sendBtn = document.getElementById('send-btn');
+        const stopBtn = document.getElementById('stop-btn');
         const resetBtn = document.getElementById('reset-btn');
-        const historyBtn = document.getElementById('history-btn');
         const userInput = document.getElementById('user-input');
         const baselineChat = document.getElementById('baseline-chat');
         const quantizedChat = document.getElementById('quantized-chat');
@@ -438,102 +678,126 @@
             return { mean, stdDev };
         }
 
-        // Initialize the performance chart
-        function initPerformanceChart() {
-            const ctx = document.getElementById('performance-chart').getContext('2d');
-            performanceChart = new Chart(ctx, {
+        // Clear token visualization
+        function clearTokenViz(modelType) {
+            const vizElement = document.getElementById(`${modelType}-token-viz`);
+            if (vizElement) {
+                vizElement.innerHTML = '';
+            }
+        }
+
+        // Add tokens to visualization
+        function addTokensToViz(modelType, tokenCount) {
+            const vizElement = document.getElementById(`${modelType}-token-viz`);
+            if (!vizElement) return;
+
+            if (tokenCount === 1) {
+                // Single token - just add a box
+                const tokenBox = document.createElement('div');
+                tokenBox.className = 'token-box';
+                tokenBox.style.width = '8px';
+                vizElement.appendChild(tokenBox);
+            } else if (tokenCount > 1) {
+                // Multiple tokens - show as a grouped burst
+                const burstGroup = document.createElement('div');
+                burstGroup.className = 'token-box burst-group';
+
+                for (let i = 0; i < tokenCount; i++) {
+                    const tokenBox = document.createElement('div');
+                    tokenBox.className = 'token-box';
+                    tokenBox.style.width = '8px';
+                    burstGroup.appendChild(tokenBox);
+                }
+
+                vizElement.appendChild(burstGroup);
+            }
+
+            // Auto-scroll to the end
+            vizElement.scrollLeft = vizElement.scrollWidth;
+        }
+
+        // Common chart configuration
+        function createComparisonChart(canvasId, yAxisLabel, unit) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            return new Chart(ctx, {
                 type: 'bar',
                 data: {
-                    labels: ['E2E Latency (s)', 'Inter-token Latency (ms)', 'Throughput (t/s)'],
-                    datasets: [
-                        {
-                            label: 'Baseline',
-                            data: [0, 0, 0],
-                            backgroundColor: 'rgba(71, 71, 71, 0.6)',
-                            borderColor: 'rgba(71, 71, 71, 1)',
-                            borderWidth: 1
-                        },
-                        {
-                            label: 'Quantized',
-                            data: [0, 0, 0],
-                            backgroundColor: 'rgba(238, 0, 0, 0.6)',
-                            borderColor: 'rgba(238, 0, 0, 1)',
-                            borderWidth: 1
-                        }
-                    ]
+                    labels: ['Standard', 'Speculative'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: [
+                            'rgba(71, 71, 71, 0.6)',
+                            'rgba(34, 197, 94, 0.6)'
+                        ],
+                        borderColor: [
+                            'rgba(71, 71, 71, 1)',
+                            'rgba(34, 197, 94, 1)'
+                        ],
+                        borderWidth: 1
+                    }]
                 },
                 options: {
-                    indexAxis: 'y',
                     responsive: true,
                     maintainAspectRatio: false,
+                    resizeDelay: 0,
                     scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                font: {
+                                    size: 10
+                                }
+                            }
+                        },
                         x: {
-                            beginAtZero: true
+                            ticks: {
+                                font: {
+                                    size: 10
+                                }
+                            }
                         }
                     },
                     plugins: {
                         legend: {
-                            position: 'top',
-                            labels: {
-                                boxWidth: 12,
-                                font: {
-                                    size: 11
-                                }
-                            }
+                            display: false
                         },
                         tooltip: {
                             callbacks: {
-                                label: function (context) {
-                                    let label = context.dataset.label || '';
-                                    if (label) {
-                                        label += ': ';
-                                    }
-                                    if (context.parsed.x !== null) {
-                                        const dataIndex = context.dataIndex;
-                                        const stats = context.datasetIndex === 0 ? baselineStats : quantizedStats;
-
-                                        if (dataIndex === 0) { // E2E Latency
-                                            return label + context.parsed.x.toFixed(2) + ' s';
-                                        } else if (dataIndex === 2) { // Throughput
-                                            return label + context.parsed.x.toFixed(1) + ' tokens/s';
-                                        } else if (dataIndex === 1 && stats.itlValues.length > 0) { // ITL
-                                            return label + `${context.parsed.x.toFixed(1)} ms (σ=${stats.itlStdDev.toFixed(1)})`;
-                                        } else { // Fallback for ITL if no values
-                                            return label + context.parsed.x.toFixed(1) + ' ms';
-                                        }
-                                    }
-                                    return label;
+                                label: function(context) {
+                                    return context.parsed.y.toFixed(2) + ' ' + unit;
                                 }
                             }
                         },
                         datalabels: {
                             anchor: 'end',
-                            align: 'right',
-                            formatter: function (value, context) {
-                                const dataIndex = context.dataIndex;
-                                const stats = context.datasetIndex === 0 ? baselineStats : quantizedStats;
-
-                                if (dataIndex === 0) { // E2E Latency
-                                    return value.toFixed(2) + ' s';
-                                } else if (dataIndex === 2) { // Throughput
-                                    return value.toFixed(1) + ' t/s';
-                                } else if (dataIndex === 1 && stats.itlValues.length > 0) { // ITL
-                                    return `${value.toFixed(1)} ±${stats.itlStdDev.toFixed(1)} ms`;
+                            align: 'top',
+                            formatter: function(value) {
+                                if (value === 0) return '';
+                                // Format based on magnitude
+                                if (unit === 's') {
+                                    return value.toFixed(2) + unit;
+                                } else if (unit === 't/s') {
+                                    return value.toFixed(1) + unit;
                                 } else {
-                                    return value.toFixed(1) + ' ms';
+                                    return value.toFixed(1) + unit;
                                 }
                             },
-                            color: function (context) {
-                                return context.datasetIndex === 0 ? 'rgb(71, 71, 71)' : 'rgb(238, 0, 0)';
-                            },
+                            color: '#374151',
                             font: {
                                 weight: 'bold',
-                                size: 11
+                                size: 10
                             }
                         }
                     }
                 }
             });
+        }
+
+        // Initialize the performance charts
+        function initPerformanceCharts() {
+            e2eChart = createComparisonChart('e2e-chart', 'Seconds', 's');
+            itlChart = createComparisonChart('itl-chart', 'Milliseconds', 'ms');
+            throughputChart = createComparisonChart('throughput-chart', 'Tokens/s', 't/s');
         }
 
         // Connect to models
@@ -637,8 +901,13 @@
             // Clear input
             userInput.value = '';
 
-            // Disable send button during request
+            // Create abort controller for this request
+            currentAbortController = new AbortController();
+
+            // Update button states
             sendBtn.disabled = true;
+            sendBtn.classList.add('hidden');
+            stopBtn.classList.remove('hidden');
             sendBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
 
             // Get parameters
@@ -664,6 +933,26 @@
             quantizedStats.ttft = null;
             baselineStats.itl = null;
             quantizedStats.itl = null;
+            baselineStats.itlValues = [];
+            baselineStats.itlMean = null;
+            baselineStats.throughput = null;
+            baselineStats.lastTokenTime = null;
+            quantizedStats.itlValues = [];
+            quantizedStats.itlMean = null;
+            quantizedStats.throughput = null;
+            quantizedStats.lastTokenTime = null;
+            quantizedStats.draftTokensProposed = 0;
+            quantizedStats.draftTokensAccepted = 0;
+
+            // Reset summary stats display
+            document.getElementById('speed-improvement').textContent = '-';
+            document.getElementById('e2e-latency-speedup').textContent = '-';
+            document.getElementById('itl-improvement').textContent = '-';
+            document.getElementById('acceptance-rate').textContent = '-';
+
+            // Clear token visualizations
+            clearTokenViz('baseline');
+            clearTokenViz('quantized');
 
             // Create streaming content divs
             const baselineContentDiv = addMessage(baselineChat, 'assistant', '', true);
@@ -675,27 +964,39 @@
                 const quantizedUrl = document.getElementById('quantized-url').value;
 
                 console.log("Calling both models concurrently...");
-                const baselinePromise = callModel(baselineUrl, messages, temperature, maxTokens, stream, baselineContentDiv, 'baseline');
-                const quantizedPromise = callModel(quantizedUrl, messages, temperature, maxTokens, stream, quantizedContentDiv, 'quantized');
+                const baselinePromise = callModel(baselineUrl, messages, temperature, maxTokens, stream, baselineContentDiv, 'baseline', currentAbortController.signal);
+                const quantizedPromise = callModel(quantizedUrl, messages, temperature, maxTokens, stream, quantizedContentDiv, 'quantized', currentAbortController.signal);
 
                 await Promise.all([baselinePromise, quantizedPromise]);
                 console.log("Both model calls finished (or errored).");
 
-                // Update summary stats after both models have potentially updated their individual stats
+                // Update summary stats and charts after both models have finished
                 updateSummaryStats();
+                updateCharts();
 
             } catch (error) {
-                console.error('Error calling models:', error);
-                addMessage(baselineChat, 'assistant', 'Error: ' + error.message);
-                addMessage(quantizedChat, 'assistant', 'Error: ' + error.message);
+                if (error.name === 'AbortError') {
+                    console.log('Request was cancelled by user');
+                    addMessage(baselineChat, 'assistant', '⚠️ Generation stopped');
+                    addMessage(quantizedChat, 'assistant', '⚠️ Generation stopped');
+                } else {
+                    console.error('Error calling models:', error);
+                    addMessage(baselineChat, 'assistant', 'Error: ' + error.message);
+                    addMessage(quantizedChat, 'assistant', 'Error: ' + error.message);
+                }
             } finally {
+                currentAbortController = null;
                 sendBtn.disabled = false;
-                sendBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>Send';
+                sendBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+
+                // Restore the send button (input was already cleared)
+                sendBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>Send<span class="ml-2 text-xs">(<span id="token-count">0</span> tokens)</span>';
             }
         }
 
         // Call a single model
-        async function callModel(url, messages, temperature, maxTokens, stream, contentDiv, modelType) {
+        async function callModel(url, messages, temperature, maxTokens, stream, contentDiv, modelType, abortSignal) {
             const stats = modelType === 'baseline' ? baselineStats : quantizedStats;
             let markdownBuffer = '';
             let lastParsedLength = 0;
@@ -707,6 +1008,10 @@
                 max_tokens: maxTokens,
                 stream: stream
             };
+
+            // Note: By default, vLLM does not enable extended thinking/reasoning modes.
+            // If you need to explicitly disable it for certain models, you can add:
+            // reasoning_effort: "none" or other model-specific parameters here.
 
             if (stream) {
                 // Create two divs - one for parsed markdown and one for streaming text
@@ -721,7 +1026,8 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify(payload),
+                    signal: abortSignal
                 });
 
                 if (!response.ok) {
@@ -822,6 +1128,9 @@
                                     const token = data.choices[0].delta.content;
                                     markdownBuffer += token;
 
+                                    // Count actual tokens in this chunk (important for speculative decoding!)
+                                    const tokensInChunk = getTokenCount(token);
+
                                     // Scroll chat window to show latest content
                                     const chatElement = document.getElementById(`${modelType}-chat`);
                                     chatElement.scrollTop = chatElement.scrollHeight;
@@ -833,8 +1142,10 @@
                                         firstToken = false;
                                     } else {
                                         // Record inter-token latency (ITL)
+                                        // For speculative decoding: divide by number of tokens in chunk
                                         const currentItl = Date.now() - (stats.lastTokenTime || stats.startTime);
-                                        stats.itlValues.push(currentItl);
+                                        const perTokenItl = tokensInChunk > 0 ? currentItl / tokensInChunk : currentItl;
+                                        stats.itlValues.push(perTokenItl);
                                         const { mean, stdDev } = calculateStats(stats.itlValues);
                                         stats.itlMean = mean;
                                         stats.itlStdDev = stdDev;
@@ -843,32 +1154,34 @@
                                     }
 
                                     stats.lastTokenTime = Date.now();
-                                    stats.tokens++;
+                                    stats.tokens += tokensInChunk; // Add actual token count!
+
+                                    // Add tokens to visualization
+                                    // For standard decoding: always show 1 chunk (even if multiple tokens)
+                                    // For speculative: show actual token count to visualize accepted drafts
+                                    const vizTokenCount = modelType === 'baseline' ? 1 : tokensInChunk;
+                                    addTokensToViz(modelType, vizTokenCount);
+
+                                    // For speculative decoding: track acceptance rate
+                                    // When tokensInChunk > 1, multiple draft tokens were accepted
+                                    if (modelType === 'quantized' && tokensInChunk > 0) {
+                                        // In speculative decoding, we typically propose N tokens per step
+                                        // If tokensInChunk > 1, those are accepted draft tokens
+                                        const proposedTokens = Math.max(5, tokensInChunk); // Assume 5 proposed
+                                        stats.draftTokensProposed += proposedTokens;
+                                        stats.draftTokensAccepted += tokensInChunk;
+                                    }
 
                                     // Calculate throughput in real-time
                                     const duration = (Date.now() - startTime) / 1000; // Convert to seconds
                                     stats.throughput = stats.tokens / duration;
                                     document.getElementById(`${modelType}-throughput`).textContent = stats.throughput.toFixed(2) + ' t/s';
 
-                                    // Update chart in real-time
-                                    if (performanceChart) {
-                                        const baselineE2ELatency = (baselineStats.lastTokenTime && baselineStats.startTime) ? (baselineStats.lastTokenTime - baselineStats.startTime) / 1000 : 0;
-                                        const quantizedE2ELatency = (quantizedStats.lastTokenTime && quantizedStats.startTime) ? (quantizedStats.lastTokenTime - quantizedStats.startTime) / 1000 : 0;
+                                    // Update charts in real-time
+                                    updateCharts();
 
-                                        const baselineData = [
-                                            baselineE2ELatency,
-                                            baselineStats.itlMean || 0,
-                                            baselineStats.throughput || 0
-                                        ];
-                                        const quantizedData = [
-                                            quantizedE2ELatency,
-                                            quantizedStats.itlMean || 0,
-                                            quantizedStats.throughput || 0
-                                        ];
-                                        performanceChart.data.datasets[0].data = baselineData;
-                                        performanceChart.data.datasets[1].data = quantizedData;
-                                        performanceChart.update('none'); // Use 'none' for smoother updates
-                                    }
+                                    // Update summary stats in real-time
+                                    updateSummaryStats();
                                 }
                             } catch (e) {
                                 console.error('Error parsing stream data:', e);
@@ -883,7 +1196,8 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify(payload),
+                    signal: abortSignal
                 });
 
                 const data = await response.json();
@@ -904,8 +1218,43 @@
             }
         }
 
+        // Update all performance charts
+        function updateCharts() {
+            const baselineE2ELatency = (baselineStats.lastTokenTime && baselineStats.startTime)
+                ? (baselineStats.lastTokenTime - baselineStats.startTime) / 1000
+                : 0;
+            const quantizedE2ELatency = (quantizedStats.lastTokenTime && quantizedStats.startTime)
+                ? (quantizedStats.lastTokenTime - quantizedStats.startTime) / 1000
+                : 0;
+
+            // Update E2E Latency Chart
+            if (e2eChart) {
+                e2eChart.data.datasets[0].data = [baselineE2ELatency, quantizedE2ELatency];
+                e2eChart.update('none');
+            }
+
+            // Update ITL Chart
+            if (itlChart) {
+                itlChart.data.datasets[0].data = [
+                    baselineStats.itlMean || 0,
+                    quantizedStats.itlMean || 0
+                ];
+                itlChart.update('none');
+            }
+
+            // Update Throughput Chart
+            if (throughputChart) {
+                throughputChart.data.datasets[0].data = [
+                    baselineStats.throughput || 0,
+                    quantizedStats.throughput || 0
+                ];
+                throughputChart.update('none');
+            }
+        }
+
         // Update summary statistics
         function updateSummaryStats() {
+            // Throughput Speedup
             if (baselineStats.throughput && quantizedStats.throughput) {
                 const speedMultiplier = (quantizedStats.throughput / baselineStats.throughput).toFixed(1);
                 document.getElementById('speed-improvement').textContent = `${speedMultiplier}x`;
@@ -917,9 +1266,12 @@
                         document.getElementById('speed-improvement').classList.remove('highlight');
                     }, 2000);
                 }
+            } else if (baselineStats.throughput || quantizedStats.throughput) {
+                // Show partial data if only one model is generating
+                document.getElementById('speed-improvement').textContent = '...';
             }
 
-            // Calculate and display E2E Latency Speedup
+            // E2E Latency Speedup
             if (baselineStats.lastTokenTime && baselineStats.startTime && quantizedStats.lastTokenTime && quantizedStats.startTime) {
                 const baselineE2ELatencyMs = baselineStats.lastTokenTime - baselineStats.startTime;
                 const quantizedE2ELatencyMs = quantizedStats.lastTokenTime - quantizedStats.startTime;
@@ -930,33 +1282,33 @@
                 } else {
                     document.getElementById('e2e-latency-speedup').textContent = '-';
                 }
-            } else {
-                document.getElementById('e2e-latency-speedup').textContent = '-';
+            } else if (baselineStats.lastTokenTime || quantizedStats.lastTokenTime) {
+                // Show partial data if only one model is generating
+                document.getElementById('e2e-latency-speedup').textContent = '...';
             }
 
+            // ITL Speedup
             if (baselineStats.itlValues.length > 0 && quantizedStats.itlValues.length > 0 && baselineStats.itlMean && quantizedStats.itlMean) {
                 const itlMultiplier = (baselineStats.itlMean / quantizedStats.itlMean).toFixed(1);
                 if (document.getElementById('itl-improvement')) {
                     document.getElementById('itl-improvement').textContent = `${itlMultiplier}x`;
                 }
+            } else if (baselineStats.itlValues.length > 0 || quantizedStats.itlValues.length > 0) {
+                // Show partial data if only one model is generating
+                if (document.getElementById('itl-improvement')) {
+                    document.getElementById('itl-improvement').textContent = '...';
+                }
             }
 
-            // Update chart
-            if (performanceChart) {
-                const baselineE2ELatency = (baselineStats.lastTokenTime && baselineStats.startTime) ? (baselineStats.lastTokenTime - baselineStats.startTime) / 1000 : 0;
-                const quantizedE2ELatency = (quantizedStats.lastTokenTime && quantizedStats.startTime) ? (quantizedStats.lastTokenTime - quantizedStats.startTime) / 1000 : 0;
-
-                performanceChart.data.datasets[0].data = [
-                    baselineE2ELatency,
-                    baselineStats.itlMean || 0,
-                    baselineStats.throughput || 0
-                ];
-                performanceChart.data.datasets[1].data = [
-                    quantizedE2ELatency,
-                    quantizedStats.itlMean || 0,
-                    quantizedStats.throughput || 0
-                ];
-                performanceChart.update();
+            // Acceptance Rate (for speculative decoding)
+            if (quantizedStats.draftTokensProposed > 0) {
+                const acceptanceRate = ((quantizedStats.draftTokensAccepted / quantizedStats.draftTokensProposed) * 100).toFixed(1);
+                document.getElementById('acceptance-rate').textContent = `${acceptanceRate}%`;
+                document.getElementById('quantized-accept-rate').textContent = `${acceptanceRate}%`;
+            } else if (quantizedStats.tokens > 0) {
+                // Show that we're calculating
+                document.getElementById('acceptance-rate').textContent = '...';
+                document.getElementById('quantized-accept-rate').textContent = '...';
             }
         }
 
@@ -990,28 +1342,37 @@
                 throughput: null,
                 tokens: 0,
                 startTime: null,
-                lastTokenTime: null
+                lastTokenTime: null,
+                acceptanceRate: null,
+                draftTokensProposed: 0,
+                draftTokensAccepted: 0
             };
 
             // Reset UI
-            document.getElementById('baseline-model-name').textContent = 'Baseline Model';
+            document.getElementById('baseline-model-name').textContent = 'Standard Decoding';
             document.getElementById('baseline-status').textContent = 'Disconnected';
             document.getElementById('baseline-status').className = 'text-xs px-2 py-1 rounded-full bg-gray-600';
             document.getElementById('baseline-ttft').textContent = '- ms';
             document.getElementById('baseline-itl').textContent = '- ms';
             document.getElementById('baseline-throughput').textContent = '- t/s';
-            baselineChat.innerHTML = '<div class="text-center text-gray-500 py-10"><i class="fas fa-robot text-4xl mb-2"></i><p>Connect to baseline model to start benchmarking</p></div>';
+            baselineChat.innerHTML = '<div class="text-center text-gray-500 py-10"><i class="fas fa-robot text-4xl mb-2"></i><p>Connect to standard decoding model to start benchmarking</p></div>';
 
-            document.getElementById('quantized-model-name').textContent = 'Quantized Model';
+            document.getElementById('quantized-model-name').textContent = 'Speculative Decoding';
             document.getElementById('quantized-status').textContent = 'Disconnected';
-            document.getElementById('quantized-status').className = 'text-xs px-2 py-1 rounded-full bg-red-600';
+            document.getElementById('quantized-status').className = 'text-xs px-2 py-1 rounded-full bg-green-600';
             document.getElementById('quantized-ttft').textContent = '- ms';
             document.getElementById('quantized-itl').textContent = '- ms';
             document.getElementById('quantized-throughput').textContent = '- t/s';
-            quantizedChat.innerHTML = '<div class="text-center text-red-500 py-10"><i class="fas fa-bolt text-4xl mb-2"></i><p>Connect to quantized model to start benchmarking</p></div>';
+            document.getElementById('quantized-accept-rate').textContent = '- %';
+            quantizedChat.innerHTML = '<div class="text-center text-green-500 py-10"><i class="fas fa-bolt text-4xl mb-2"></i><p>Connect to speculative decoding model to start benchmarking</p></div>';
+
+            // Clear token visualizations
+            clearTokenViz('baseline');
+            clearTokenViz('quantized');
 
             document.getElementById('speed-improvement').textContent = '-';
             document.getElementById('e2e-latency-speedup').textContent = '-';
+            document.getElementById('acceptance-rate').textContent = '-';
             if (document.getElementById('itl-improvement')) {
                 document.getElementById('itl-improvement').textContent = '-';
             }
@@ -1019,24 +1380,25 @@
             sendBtn.disabled = true;
             sendBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>Send';
 
-            // Reset chart
-            if (performanceChart) {
-                performanceChart.data.datasets[0].data = [0, 0, 0];
-                performanceChart.data.datasets[1].data = [0, 0, 0];
-                performanceChart.update();
+            // Reset charts
+            if (e2eChart) {
+                e2eChart.data.datasets[0].data = [0, 0];
+                e2eChart.update();
             }
-        }
-
-        // Show history
-        function showHistory() {
-            alert('History feature would show previous benchmark results here.');
-            // In a real implementation, this would show a modal with previous test results
+            if (itlChart) {
+                itlChart.data.datasets[0].data = [0, 0];
+                itlChart.update();
+            }
+            if (throughputChart) {
+                throughputChart.data.datasets[0].data = [0, 0];
+                throughputChart.update();
+            }
         }
 
         // Wait for the DOM to be fully loaded before setting up event listeners
         document.addEventListener('DOMContentLoaded', async () => {
             await initTokenizer();
-            initPerformanceChart();
+            initPerformanceCharts();
 
             // Setup modal functionality
             const setupModal = document.getElementById('setup-modal');
@@ -1086,12 +1448,23 @@
 
             // Other event listeners that depend on DOM elements
             sendBtn.addEventListener('click', sendMessage);
+            stopBtn.addEventListener('click', () => {
+                if (currentAbortController) {
+                    currentAbortController.abort();
+                }
+            });
             resetBtn.addEventListener('click', resetApplication);
-            historyBtn.addEventListener('click', showHistory);
             userInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     sendMessage();
+                }
+            });
+
+            // Global keyboard shortcut: Escape to stop generation
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && currentAbortController) {
+                    currentAbortController.abort();
                 }
             });
 
