@@ -264,10 +264,10 @@
             <div class="col-span-3 space-y-2">
                 <div class="stat-card bg-green-50 p-2 rounded-lg border border-green-100">
                     <div class="text-sm font-medium text-green-800 tooltip">E2E Latency Speedup
-                        <span class="tooltiptext">Total time from sending prompt to receiving complete response. Speculative decoding reduces wall-clock time by accepting multiple draft tokens per step.</span>
+                        <span class="tooltiptext">Time to generate the same number of tokens, normalized to whichever model produced fewer. Ensures a fair comparison even if response lengths differ.</span>
                     </div>
                     <div id="e2e-latency-speedup" class="text-lg font-bold text-green-900">-</div>
-                    <div class="text-xs text-green-600">End-to-End Response (s)</div>
+                    <div id="e2e-latency-subtitle" class="text-xs text-green-600">Normalized to same token count</div>
                 </div>
                 <div class="stat-card bg-yellow-50 p-2 rounded-lg border border-yellow-100">
                     <div class="text-sm font-medium text-yellow-800 tooltip">ITL Speedup
@@ -285,7 +285,7 @@
                 </div>
                 <div class="stat-card bg-purple-50 p-2 rounded-lg border border-purple-100">
                     <div class="text-sm font-medium text-purple-800 tooltip">Acceptance Rate
-                        <span class="tooltiptext">Percentage of draft tokens accepted by the target model. Higher acceptance rate (70-90%) means more efficient speculation and better speedup.</span>
+                        <span class="tooltiptext">Percentage of draft tokens accepted by the target model, measured from the vLLM server /metrics endpoint. Higher rate (70-90%) means more efficient speculation.</span>
                     </div>
                     <div id="acceptance-rate" class="text-lg font-bold text-purple-900">-</div>
                     <div class="text-xs text-purple-600">Draft tokens accepted</div>
@@ -295,7 +295,7 @@
             <!-- Performance Charts -->
             <div class="col-span-9 grid grid-cols-3 gap-3">
                 <div class="bg-white p-3 rounded-lg shadow flex flex-col">
-                    <h3 class="text-xs font-semibold text-gray-700 mb-2 text-center">E2E Latency (s)</h3>
+                    <h3 id="e2e-chart-title" class="text-xs font-semibold text-gray-700 mb-2 text-center">E2E Latency (s)</h3>
                     <div class="flex-1" style="min-height: 160px; position: relative;">
                         <canvas id="e2e-chart"></canvas>
                     </div>
@@ -409,7 +409,7 @@
                         </div>
                         <div>
                             <div class="text-green-500 tooltip">Accept Rate
-                                <span class="tooltiptext">% of draft tokens accepted (higher = better speedup)</span>
+                                <span class="tooltiptext">% of draft tokens accepted by verifier (from vLLM /metrics)</span>
                             </div>
                             <div id="quantized-accept-rate" class="font-medium">- %</div>
                         </div>
@@ -600,22 +600,6 @@
             size: null,
             connected: false,
             ttft: null,
-            itl: null,
-            itlValues: [],
-            itlMean: null,
-            itlStdDev: null,
-            throughput: null,
-            tokens: 0,
-            startTime: null,
-            lastTokenTime: null
-        };
-
-        let quantizedStats = {
-            model: null,
-            size: null,
-            connected: false,
-            ttft: null,
-            itl: null,
             itlValues: [],
             itlMean: null,
             itlStdDev: null,
@@ -623,6 +607,22 @@
             tokens: 0,
             startTime: null,
             lastTokenTime: null,
+            tokenTimestamps: []
+        };
+
+        let quantizedStats = {
+            model: null,
+            size: null,
+            connected: false,
+            ttft: null,
+            itlValues: [],
+            itlMean: null,
+            itlStdDev: null,
+            throughput: null,
+            tokens: 0,
+            startTime: null,
+            lastTokenTime: null,
+            tokenTimestamps: [],
             acceptanceRate: null,
             draftTokensProposed: 0,
             draftTokensAccepted: 0
@@ -676,6 +676,51 @@
             const stdDev = Math.sqrt(variance);
 
             return { mean, stdDev };
+        }
+
+        function getMetricsBaseUrl(apiUrl) {
+            return apiUrl.replace(/\/v1\/?$/, '') + '/metrics';
+        }
+
+        async function fetchVllmMetrics(apiUrl) {
+            try {
+                const metricsUrl = getMetricsBaseUrl(apiUrl);
+                const response = await fetch(metricsUrl);
+                const text = await response.text();
+
+                const extract = (name) => {
+                    const match = text.match(new RegExp(`^${name.replace(/[:.]/g, '\\$&')}\\{[^}]*\\}\\s+([\\d.]+)`, 'm'));
+                    return match ? parseFloat(match[1]) : 0;
+                };
+
+                return {
+                    draftTokens: extract('vllm:spec_decode_num_draft_tokens_total'),
+                    acceptedTokens: extract('vllm:spec_decode_num_accepted_tokens_total'),
+                    numDrafts: extract('vllm:spec_decode_num_drafts_total'),
+                };
+            } catch (e) {
+                console.warn('Failed to fetch vLLM metrics:', e);
+                return null;
+            }
+        }
+
+        function getTimeAtTokenCount(tokenTimestamps, startTime, targetTokens) {
+            if (tokenTimestamps.length === 0) return null;
+            if (targetTokens <= 0) return 0;
+            const last = tokenTimestamps[tokenTimestamps.length - 1];
+            if (targetTokens >= last.tokens) return (last.time - startTime) / 1000;
+            if (targetTokens <= tokenTimestamps[0].tokens) return (tokenTimestamps[0].time - startTime) / 1000;
+
+            for (let i = 1; i < tokenTimestamps.length; i++) {
+                if (tokenTimestamps[i].tokens >= targetTokens) {
+                    const prev = tokenTimestamps[i - 1];
+                    const curr = tokenTimestamps[i];
+                    const frac = (targetTokens - prev.tokens) / (curr.tokens - prev.tokens);
+                    const interpolatedTime = prev.time + frac * (curr.time - prev.time);
+                    return (interpolatedTime - startTime) / 1000;
+                }
+            }
+            return (last.time - startTime) / 1000;
         }
 
         // Clear token visualization
@@ -923,24 +968,21 @@
                 }
             ];
 
-            // Record start time
-            const startTime = Date.now();
-            baselineStats.startTime = startTime;
-            quantizedStats.startTime = startTime;
+            // Reset per-request stats
             baselineStats.tokens = 0;
             quantizedStats.tokens = 0;
             baselineStats.ttft = null;
             quantizedStats.ttft = null;
-            baselineStats.itl = null;
-            quantizedStats.itl = null;
             baselineStats.itlValues = [];
             baselineStats.itlMean = null;
             baselineStats.throughput = null;
             baselineStats.lastTokenTime = null;
+            baselineStats.tokenTimestamps = [];
             quantizedStats.itlValues = [];
             quantizedStats.itlMean = null;
             quantizedStats.throughput = null;
             quantizedStats.lastTokenTime = null;
+            quantizedStats.tokenTimestamps = [];
             quantizedStats.draftTokensProposed = 0;
             quantizedStats.draftTokensAccepted = 0;
 
@@ -963,12 +1005,25 @@
                 const baselineUrl = document.getElementById('baseline-url').value;
                 const quantizedUrl = document.getElementById('quantized-url').value;
 
+                const metricsBefore = await fetchVllmMetrics(quantizedUrl);
+
+                // Set startTime after metrics fetch so TTFT isn't inflated
+                const modelStartTime = Date.now();
+                baselineStats.startTime = modelStartTime;
+                quantizedStats.startTime = modelStartTime;
+
                 console.log("Calling both models concurrently...");
                 const baselinePromise = callModel(baselineUrl, messages, temperature, maxTokens, stream, baselineContentDiv, 'baseline', currentAbortController.signal);
                 const quantizedPromise = callModel(quantizedUrl, messages, temperature, maxTokens, stream, quantizedContentDiv, 'quantized', currentAbortController.signal);
 
                 await Promise.all([baselinePromise, quantizedPromise]);
                 console.log("Both model calls finished (or errored).");
+
+                const metricsAfter = await fetchVllmMetrics(quantizedUrl);
+                if (metricsBefore && metricsAfter) {
+                    quantizedStats.draftTokensProposed = metricsAfter.draftTokens - metricsBefore.draftTokens;
+                    quantizedStats.draftTokensAccepted = metricsAfter.acceptedTokens - metricsBefore.acceptedTokens;
+                }
 
                 // Update summary stats and charts after both models have finished
                 updateSummaryStats();
@@ -1038,7 +1093,6 @@
                 const decoder = new TextDecoder();
                 let buffer = '';
                 let firstToken = true;
-                let startTime = Date.now();
                 let lastMarkdownUpdate = 0;
                 const markdownUpdateInterval = 20; // Update markdown parsing every N ms
 
@@ -1135,45 +1189,34 @@
                                     const chatElement = document.getElementById(`${modelType}-chat`);
                                     chatElement.scrollTop = chatElement.scrollHeight;
 
+                                    const now = Date.now();
+
                                     // Record first token time (TTFT)
                                     if (firstToken) {
-                                        stats.ttft = Date.now() - stats.startTime;
+                                        stats.ttft = now - stats.startTime;
                                         document.getElementById(`${modelType}-ttft`).textContent = stats.ttft + ' ms';
                                         firstToken = false;
                                     } else {
                                         // Record inter-token latency (ITL)
-                                        // For speculative decoding: divide by number of tokens in chunk
-                                        const currentItl = Date.now() - (stats.lastTokenTime || stats.startTime);
+                                        const currentItl = now - (stats.lastTokenTime || stats.startTime);
                                         const perTokenItl = tokensInChunk > 0 ? currentItl / tokensInChunk : currentItl;
                                         stats.itlValues.push(perTokenItl);
                                         const { mean, stdDev } = calculateStats(stats.itlValues);
                                         stats.itlMean = mean;
                                         stats.itlStdDev = stdDev;
-                                        stats.itl = currentItl; // Keep for backwards compatibility
                                         document.getElementById(`${modelType}-itl`).textContent = `${mean.toFixed(1)} ±${stdDev.toFixed(1)} ms`;
                                     }
 
-                                    stats.lastTokenTime = Date.now();
-                                    stats.tokens += tokensInChunk; // Add actual token count!
+                                    stats.lastTokenTime = now;
+                                    stats.tokens += tokensInChunk;
+                                    stats.tokenTimestamps.push({ tokens: stats.tokens, time: now });
 
                                     // Add tokens to visualization
-                                    // For standard decoding: always show 1 chunk (even if multiple tokens)
-                                    // For speculative: show actual token count to visualize accepted drafts
                                     const vizTokenCount = modelType === 'baseline' ? 1 : tokensInChunk;
                                     addTokensToViz(modelType, vizTokenCount);
 
-                                    // For speculative decoding: track acceptance rate
-                                    // When tokensInChunk > 1, multiple draft tokens were accepted
-                                    if (modelType === 'quantized' && tokensInChunk > 0) {
-                                        // In speculative decoding, we typically propose N tokens per step
-                                        // If tokensInChunk > 1, those are accepted draft tokens
-                                        const proposedTokens = Math.max(5, tokensInChunk); // Assume 5 proposed
-                                        stats.draftTokensProposed += proposedTokens;
-                                        stats.draftTokensAccepted += tokensInChunk;
-                                    }
-
                                     // Calculate throughput in real-time
-                                    const duration = (Date.now() - startTime) / 1000; // Convert to seconds
+                                    const duration = (now - stats.startTime) / 1000;
                                     stats.throughput = stats.tokens / duration;
                                     document.getElementById(`${modelType}-throughput`).textContent = stats.throughput.toFixed(2) + ' t/s';
 
@@ -1205,32 +1248,57 @@
                 contentDiv.innerHTML = marked.parse(content);
 
                 // Calculate metrics for non-streaming
-                const duration = (Date.now() - stats.startTime) / 1000; // Convert to seconds
-                stats.ttft = duration;
+                stats.ttft = Date.now() - stats.startTime;
                 document.getElementById(`${modelType}-ttft`).textContent = stats.ttft + ' ms';
 
-                // Estimate tokens (this would be better with actual token count from API)
-                stats.tokens = content.split(' ').length * 1.33; // Rough estimate
+                stats.tokens = getTokenCount(content);
+                stats.lastTokenTime = Date.now();
+                stats.tokenTimestamps.push({ tokens: stats.tokens, time: Date.now() });
 
-                // Calculate throughput
+                const duration = (Date.now() - stats.startTime) / 1000;
                 stats.throughput = stats.tokens / duration;
                 document.getElementById(`${modelType}-throughput`).textContent = stats.throughput.toFixed(2) + ' t/s';
             }
         }
 
+        function getE2EComparison() {
+            const bHas = baselineStats.tokenTimestamps.length > 0 && baselineStats.startTime;
+            const qHas = quantizedStats.tokenTimestamps.length > 0 && quantizedStats.startTime;
+            if (!bHas && !qHas) return { baseline: 0, quantized: 0, comparisonTokens: 0 };
+
+            const bTokens = baselineStats.tokens || 0;
+            const qTokens = quantizedStats.tokens || 0;
+
+            if (bHas && !qHas) return { baseline: (baselineStats.lastTokenTime - baselineStats.startTime) / 1000, quantized: 0, comparisonTokens: bTokens };
+            if (!bHas && qHas) return { baseline: 0, quantized: (quantizedStats.lastTokenTime - quantizedStats.startTime) / 1000, comparisonTokens: qTokens };
+
+            const comparisonTokens = Math.min(bTokens, qTokens);
+            if (comparisonTokens <= 0) return { baseline: 0, quantized: 0, comparisonTokens: 0 };
+
+            const baselineE2E = getTimeAtTokenCount(baselineStats.tokenTimestamps, baselineStats.startTime, comparisonTokens);
+            const quantizedE2E = getTimeAtTokenCount(quantizedStats.tokenTimestamps, quantizedStats.startTime, comparisonTokens);
+
+            return {
+                baseline: baselineE2E || 0,
+                quantized: quantizedE2E || 0,
+                comparisonTokens
+            };
+        }
+
         // Update all performance charts
         function updateCharts() {
-            const baselineE2ELatency = (baselineStats.lastTokenTime && baselineStats.startTime)
-                ? (baselineStats.lastTokenTime - baselineStats.startTime) / 1000
-                : 0;
-            const quantizedE2ELatency = (quantizedStats.lastTokenTime && quantizedStats.startTime)
-                ? (quantizedStats.lastTokenTime - quantizedStats.startTime) / 1000
-                : 0;
+            const e2e = getE2EComparison();
 
             // Update E2E Latency Chart
             if (e2eChart) {
-                e2eChart.data.datasets[0].data = [baselineE2ELatency, quantizedE2ELatency];
+                e2eChart.data.datasets[0].data = [e2e.baseline, e2e.quantized];
                 e2eChart.update('none');
+            }
+
+            // Update E2E chart title
+            const e2eTitle = document.getElementById('e2e-chart-title');
+            if (e2eTitle && e2e.comparisonTokens > 0) {
+                e2eTitle.textContent = `E2E Latency @ ${e2e.comparisonTokens} tokens (s)`;
             }
 
             // Update ITL Chart
@@ -1271,19 +1339,14 @@
                 document.getElementById('speed-improvement').textContent = '...';
             }
 
-            // E2E Latency Speedup
-            if (baselineStats.lastTokenTime && baselineStats.startTime && quantizedStats.lastTokenTime && quantizedStats.startTime) {
-                const baselineE2ELatencyMs = baselineStats.lastTokenTime - baselineStats.startTime;
-                const quantizedE2ELatencyMs = quantizedStats.lastTokenTime - quantizedStats.startTime;
-
-                if (quantizedE2ELatencyMs > 0) {
-                    const e2eLatencySpeedup = (baselineE2ELatencyMs / quantizedE2ELatencyMs).toFixed(1);
-                    document.getElementById('e2e-latency-speedup').textContent = `${e2eLatencySpeedup}x`;
-                } else {
-                    document.getElementById('e2e-latency-speedup').textContent = '-';
-                }
-            } else if (baselineStats.lastTokenTime || quantizedStats.lastTokenTime) {
-                // Show partial data if only one model is generating
+            // E2E Latency Speedup (normalized to same token count)
+            const e2e = getE2EComparison();
+            if (e2e.baseline > 0 && e2e.quantized > 0) {
+                const e2eLatencySpeedup = (e2e.baseline / e2e.quantized).toFixed(1);
+                document.getElementById('e2e-latency-speedup').textContent = `${e2eLatencySpeedup}x`;
+                const subtitleEl = document.getElementById('e2e-latency-subtitle');
+                if (subtitleEl) subtitleEl.textContent = `@ ${e2e.comparisonTokens} tokens`;
+            } else if (baselineStats.tokens > 0 || quantizedStats.tokens > 0) {
                 document.getElementById('e2e-latency-speedup').textContent = '...';
             }
 
@@ -1300,15 +1363,14 @@
                 }
             }
 
-            // Acceptance Rate (for speculative decoding)
+            // Acceptance Rate (from vLLM metrics, available after request completes)
             if (quantizedStats.draftTokensProposed > 0) {
                 const acceptanceRate = ((quantizedStats.draftTokensAccepted / quantizedStats.draftTokensProposed) * 100).toFixed(1);
                 document.getElementById('acceptance-rate').textContent = `${acceptanceRate}%`;
                 document.getElementById('quantized-accept-rate').textContent = `${acceptanceRate}%`;
             } else if (quantizedStats.tokens > 0) {
-                // Show that we're calculating
-                document.getElementById('acceptance-rate').textContent = '...';
-                document.getElementById('quantized-accept-rate').textContent = '...';
+                document.getElementById('acceptance-rate').textContent = 'pending';
+                document.getElementById('quantized-accept-rate').textContent = 'pending';
             }
         }
 
@@ -1320,22 +1382,6 @@
                 size: null,
                 connected: false,
                 ttft: null,
-                itl: null,
-                itlValues: [],
-                itlMean: null,
-                itlStdDev: null,
-                throughput: null,
-                tokens: 0,
-                startTime: null,
-                lastTokenTime: null
-            };
-
-            quantizedStats = {
-                model: null,
-                size: null,
-                connected: false,
-                ttft: null,
-                itl: null,
                 itlValues: [],
                 itlMean: null,
                 itlStdDev: null,
@@ -1343,6 +1389,22 @@
                 tokens: 0,
                 startTime: null,
                 lastTokenTime: null,
+                tokenTimestamps: []
+            };
+
+            quantizedStats = {
+                model: null,
+                size: null,
+                connected: false,
+                ttft: null,
+                itlValues: [],
+                itlMean: null,
+                itlStdDev: null,
+                throughput: null,
+                tokens: 0,
+                startTime: null,
+                lastTokenTime: null,
+                tokenTimestamps: [],
                 acceptanceRate: null,
                 draftTokensProposed: 0,
                 draftTokensAccepted: 0
@@ -1372,6 +1434,8 @@
 
             document.getElementById('speed-improvement').textContent = '-';
             document.getElementById('e2e-latency-speedup').textContent = '-';
+            document.getElementById('e2e-latency-subtitle').textContent = 'Normalized to same token count';
+            document.getElementById('e2e-chart-title').textContent = 'E2E Latency (s)';
             document.getElementById('acceptance-rate').textContent = '-';
             if (document.getElementById('itl-improvement')) {
                 document.getElementById('itl-improvement').textContent = '-';
